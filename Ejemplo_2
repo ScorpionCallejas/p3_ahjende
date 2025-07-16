@@ -1,0 +1,295 @@
+<?php
+/********************************************
+ *  CONFIGURACIÓN BD  (MySQLi + PHP 5.6)
+ ********************************************/
+$host     = 'localhost';
+$user     = 'root';
+$pass     = '';
+$database = 'database_usuarios';
+
+$conn = new mysqli($host, $user, $pass, $database);
+if ($conn->connect_error) {
+    die('Conexión fallida: ' . $conn->connect_error);
+}
+
+/********************************************
+ *  HELPERS
+ ********************************************/
+function jsonExit($data) {
+    header('Content‑Type: application/json; charset=utf-8');
+    echo json_encode($data);
+    exit;
+}
+
+$mod = isset($_GET['mod']) ? $_GET['mod'] : '';
+$act = isset($_GET['act']) ? $_GET['act'] : '';
+
+/********************************************
+ *  ENDPOINTS GET
+ ********************************************/
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+
+    /* ---- CITAS ---- */
+    if ($mod === 'cita') {
+        $fecha   = isset($_GET['fecha'])   ? $_GET['fecha']   : '';
+        $plantel = isset($_GET['plantel']) ? $_GET['plantel'] : '';
+        $ejec    = isset($_GET['ejec'])    ? $_GET['ejec']    : '';
+
+        $sql  = "SELECT id_cit, cit_cit, hor_cit, nom_cit, tel_cit, plantel, ejecutivo FROM cita WHERE 1";
+        if ($fecha)   $sql .= " AND cit_cit   = '" . $conn->real_escape_string($fecha)   . "'";
+        if ($plantel) $sql .= " AND plantel   = '" . $conn->real_escape_string($plantel) . "'";
+        if ($ejec)    $sql .= " AND ejecutivo = '" . $conn->real_escape_string($ejec)    . "'";
+
+        $res = $conn->query($sql);
+        $out = array();
+        while ($row = $res->fetch_assoc()) $out[] = $row;
+        jsonExit($out);
+    }
+
+    /* ---- EJECUTIVOS ---- */
+    if ($mod === 'ejec') {
+        $res = $conn->query("SELECT id_ej, nom_ej FROM ejecutivo");
+        $out = array();
+        while ($row = $res->fetch_assoc()) $out[] = $row;
+        jsonExit($out);
+    }
+
+    /* ---- PLANTELES ---- */
+    if ($mod === 'plantel') {
+        $res = $conn->query("SELECT id_pl, nom_pl FROM plantel");
+        $out = array();
+        while ($row = $res->fetch_assoc()) $out[] = $row;
+        jsonExit($out);
+    }
+}
+
+/********************************************
+ *  ENDPOINTS POST
+ ********************************************/
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    /* Leemos cuerpo JSON */
+    $body = json_decode(file_get_contents('php://input'), true);
+
+    if ($mod === 'cita') {
+
+        /* ---- UPDATE VARIOS ---- */
+        if ($act === 'update') {
+            foreach ($body as $r) {
+                $id = (int)$r['id_cit'];
+                $campos = array('cit_cit','hor_cit','nom_cit','tel_cit','plantel','ejecutivo');
+                foreach ($campos as $c) {
+                    if (isset($r[$c])) {
+                        $v = $conn->real_escape_string($r[$c]);
+                        $conn->query("UPDATE cita SET $c='$v' WHERE id_cit=$id");
+                    }
+                }
+            }
+            jsonExit(array('status'=>'ok'));
+        }
+
+        /* ---- INSERT ---- */
+        if ($act === 'insert') {
+            $f  = $conn->real_escape_string($body['cit_cit']);
+            $h  = $conn->real_escape_string($body['hor_cit']);
+            $n  = $conn->real_escape_string($body['nom_cit']);
+            $t  = $conn->real_escape_string($body['tel_cit']);
+            $pl = (int)$body['plantel'];
+            $ej = (int)$body['ejecutivo'];
+
+            $conn->query("INSERT INTO cita(cit_cit, hor_cit, nom_cit, tel_cit, plantel, ejecutivo)
+                          VALUES('$f', '$h', '$n', '$t', $pl, $ej)");
+            jsonExit(array('status'=>'ok'));
+        }
+
+        /* ---- DELETE ---- */
+        if ($act === 'delete') {
+            $id = (int)$body['id_cit'];
+            $conn->query("DELETE FROM cita WHERE id_cit=$id");
+            jsonExit(array('status'=>'ok'));
+        }
+    }
+
+    /* Aquí puedes añadir CRUD para ejecutivos o planteles si lo deseas */
+}
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Sistema Completo (PHP 5.6)</title>
+
+<!-- Handsontable -->
+<link href="https://cdn.jsdelivr.net/npm/handsontable@8.4.0/dist/handsontable.full.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/handsontable@8.4.0/dist/handsontable.full.min.js"></script>
+<style>
+body{margin:10px;font-family:sans-serif}
+#log{height:150px;overflow:auto;border:1px solid #ccc;padding:5px;font-size:13px;background:#f9f9f9}
+</style>
+</head>
+<body>
+
+<h2>📋 Citas</h2>
+<div style="margin-bottom:8px">
+    Filtros:
+    Fecha <input type="date" id="filtro_fecha">
+    Plantel <select id="filtro_plantel"></select>
+    Ejecutivo <select id="filtro_ejec"></select>
+    <button onclick="loadCitas()">🔍 Buscar</button>
+    <button onclick="saveCitas()">💾 Guardar</button>
+    <button onclick="addCita()">➕ Agregar</button>
+    <button onclick="delCita()">❌ Eliminar ID <input id="id_del" style="width:50px"></button>
+</div>
+<div id="citas" style="height:300px"></div>
+<hr>
+<h2>Ejecutivos</h2>
+<div id="ejecs" style="height:150px"></div>
+<hr>
+<h2>Planteles</h2>
+<div id="plants" style="height:150px"></div>
+<hr>
+ID Ejecutivo sesión: <input id="miId" type="number" value="1" style="width:60px">
+<div id="log"></div>
+
+<script>
+/* ---------- conexión WebSocket ---------- */
+const ws = new WebSocket('wss://socket.ahjende.com/wss/?encoding=text');
+function log(msg){
+   const d = new Date().toLocaleTimeString();
+   document.getElementById('log').innerHTML += '['+d+'] '+msg+'<br>';
+}
+
+/* ---------- meta‑datos ---------- */
+let execs = [], plants = [];
+function loadMeta(){
+  fetch('index.php?mod=ejec').then(r=>r.json()).then(data=>{
+     execs = data;
+     let html='<option value="">--Todos--</option>';
+     data.forEach(e=>html+='<option value="'+e.id_ej+'">'+e.nom_ej+'</option>');
+     document.getElementById('filtro_ejec').innerHTML = html;
+  });
+  fetch('index.php?mod=plantel').then(r=>r.json()).then(data=>{
+     plants = data;
+     let html='<option value="">--Todos--</option>';
+     data.forEach(p=>html+='<option value="'+p.id_pl+'">'+p.nom_pl+'</option>');
+     document.getElementById('filtro_plantel').innerHTML = html;
+  });
+}
+
+/* ---------- tablas ---------- */
+let htCitas, htEjecs, htPlants;
+function initTables(){
+  htCitas = new Handsontable(document.getElementById('citas'),{
+    colHeaders:['ID','Fecha','Hora','Nombre','Tel','Plantel','Ejecutivo'],
+    columns:[
+      {data:'id_cit',readOnly:true},
+      {data:'cit_cit',type:'date'},
+      {data:'hor_cit',type:'time'},
+      {data:'nom_cit'},
+      {data:'tel_cit'},
+      {data:'plantel',type:'dropdown',source:plants.map(p=>p.id_pl)},
+      {data:'ejecutivo',type:'dropdown',source:execs.map(e=>e.id_ej)}
+    ],
+    licenseKey:'non-commercial-and-evaluation',
+    rowHeaders:true,
+    dropdownMenu:true,
+    filters:true,
+    afterChange:function(changes, src){
+        if(!changes || src==='loadData' || src==='websocket') return;
+        changes.forEach(function(c){
+            const row  = c[0];
+            const prop = c[1];
+            const newV = c[3];
+            const rec  = htCitas.getSourceDataAtRow(row);
+            const msg = {
+               tipo      : 'cita_updated',
+               id_cit    : rec.id_cit,
+               campo     : prop,
+               value     : newV,
+               plantel   : rec.plantel,
+               ejecutivo : rec.ejecutivo,
+               id_ej     : parseInt(document.getElementById('miId').value,10)
+            };
+            ws.send(JSON.stringify(msg));
+            log('Enviado → ' + JSON.stringify(msg));
+        });
+    }
+  });
+
+  htEjecs = new Handsontable(document.getElementById('ejecs'),{
+    colHeaders:['ID','Nombre'],
+    columns:[{data:'id_ej',readOnly:true},{data:'nom_ej'}],
+    licenseKey:'non-commercial-and-evaluation'
+  });
+
+  htPlants = new Handsontable(document.getElementById('plants'),{
+    colHeaders:['ID','Nombre'],
+    columns:[{data:'id_pl',readOnly:true},{data:'nom_pl'}],
+    licenseKey:'non-commercial-and-evaluation'
+  });
+}
+
+/* ---------- botones ---------- */
+function loadCitas(){
+  const f = document.getElementById('filtro_fecha').value;
+  const p = document.getElementById('filtro_plantel').value;
+  const e = document.getElementById('filtro_ejec').value;
+  fetch('index.php?mod=cita&fecha='+f+'&plantel='+p+'&ejec='+e)
+    .then(r=>r.json()).then(data=>htCitas.loadData(data));
+}
+function saveCitas(){
+  fetch('index.php?mod=cita&act=update',{
+     method:'POST',
+     headers:{'Content-Type':'application/json'},
+     body:JSON.stringify(htCitas.getSourceData())
+  }).then(()=>alert('✅ Guardado'));
+}
+function addCita(){
+  const nueva = {cit_cit:'<?php echo date('Y-m-d'); ?>',hor_cit:'12:00',nom_cit:'',tel_cit:'',plantel:'',ejecutivo:''};
+  htCitas.alter('insert_row',0);
+  htCitas.setSourceDataAtRow(0,nueva);
+}
+function delCita(){
+  const id = parseInt(document.getElementById('id_del').value,10);
+  if(!id){alert('Ingresa ID');return;}
+  ws.send(JSON.stringify({tipo:'cita_delete',id_cit:id,id_ej:parseInt(document.getElementById('miId').value,10)}));
+}
+
+/* ---------- WebSocket ---------- */
+ws.onopen  = function(){ log('WS conectado'); };
+ws.onerror = function(e){ log('WS error'); };
+ws.onclose = function(){ log('WS cerrado'); };
+
+ws.onmessage = function(e){
+  const msg = JSON.parse(e.data);
+  log('Recibido ← '+e.data);
+
+  const myId = parseInt(document.getElementById('miId').value,10);
+  if(msg.id_ej === myId) return; // ignorar propios
+
+  if(msg.tipo === 'cita_updated'){
+     const rows = htCitas.getSourceData();
+     for(var i=0;i<rows.length;i++){
+        if(rows[i].id_cit == msg.id_cit){
+            htCitas.setDataAtCell(i, htCitas.propToCol(msg.campo), msg.value, 'websocket');
+            break;
+        }
+     }
+  }
+  if(msg.tipo === 'cita_delete'){
+     const rows = htCitas.getSourceData();
+     for(var i=0;i<rows.length;i++){
+        if(rows[i].id_cit == msg.id_cit){
+            htCitas.alter('remove_row', i);
+            break;
+        }
+     }
+  }
+};
+
+loadMeta();          // carga ejecutivos / planteles
+initTables();        // crea tablas vacías
+loadCitas();         // carga citas iniciales
+</script>
+</body>
+</html>
