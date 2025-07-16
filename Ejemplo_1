@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Prueba WebSocket Simple</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        #log { border: 1px solid #ccc; padding: 10px; height: 250px; overflow-y: auto; background: #f8f8f8; }
+        button { padding: 10px 20px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h2>🧪 WebSocket Demo Básico</h2>
+    <p>Este ejemplo envía mensajes entre pestañas usando WebSocket.</p>
+
+    <button onclick="enviar()">📤 Enviar mensaje</button>
+
+    <div id="log"></div>
+
+    <script>
+        // Conexión WebSocket
+        var socket = new WebSocket("wss://socket.ahjende.com/wss/?encoding=text");
+
+        // Mostrar conexión
+        socket.onopen = function() {
+            log("✅ Conectado al WebSocket");
+        };
+
+        // Mostrar mensajes recibidos
+        socket.onmessage = function(event) {
+            var data = event.data;
+            log("📨 Recibido: " + data);
+        };
+
+        // Enviar mensaje
+        function enviar() {
+            var mensaje = {
+                tipo: "mensaje_prueba",
+                texto: "Hola desde pestaña " + Math.floor(Math.random() * 100)
+            };
+            socket.send(JSON.stringify(mensaje));
+            log("📤 Enviado: " + JSON.stringify(mensaje));
+        }
+
+        // Función log
+        function log(mensaje) {
+            var t = new Date().toLocaleTimeString();
+            var logDiv = document.getElementById("log");
+            logDiv.innerHTML += "<p>[" + t + "] " + mensaje + "</p>";
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+    </script>
+
+</body>
+</html>
