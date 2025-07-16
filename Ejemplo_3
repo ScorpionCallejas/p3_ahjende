@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>⚠️ WebSocket Bucle Infinito</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/handsontable@8.4.0/dist/handsontable.full.min.css">
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        #log { border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: auto; background: #f8f8f8; margin-top: 20px; }
+        .peligro { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>⚠️ Test WebSocket con Bucle Infinito</h2>
+    <p class="peligro">Este ejemplo NO tiene protección contra bucles. Refresca la página si se bloquea.</p>
+
+    <div id="tabla" style="width: 600px; height: 300px;"></div>
+    <div id="log"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/handsontable@8.4.0/dist/handsontable.full.min.js"></script>
+    <script>
+        var socket = new WebSocket("wss://socket.ahjende.com/wss/?encoding=text");
+
+        function log(mensaje) {
+            var t = new Date().toLocaleTimeString();
+            var logDiv = document.getElementById("log");
+            logDiv.innerHTML += "<p>[" + t + "] " + mensaje + "</p>";
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        var datos = [
+            [1, "Juan Pérez", "555-1234"],
+            [2, "María García", "555-5678"]
+        ];
+
+        var container = document.getElementById("tabla");
+        var hot = new Handsontable(container, {
+            data: datos,
+            colHeaders: ["ID", "Nombre", "Teléfono"],
+            columns: [
+                { readOnly: true },
+                { type: "text" },
+                { type: "text" }
+            ],
+            licenseKey: "non-commercial-and-evaluation",
+            afterChange: function(changes, source) {
+                log("📝 afterChange (source=" + source + ")");
+                // ❌ Este ejemplo NO ignora mensajes WebSocket (causa bucle)
+                if (source !== "loadData") {
+                    changes.forEach(function(change) {
+                        var row = change[0];
+                        var col = change[1];
+                        var oldVal = change[2];
+                        var newVal = change[3];
+
+                        var id_cit = hot.getDataAtCell(row, 0);
+                        var campo = col === 1 ? "nom_cit" : "tel_cit";
+
+                        var mensaje = {
+                            tipo: "cita_actualizada",
+                            id_cit: id_cit,
+                            campo: campo,
+                            valor: newVal,
+                            id_ejecutivo: 1 // fijo
+                        };
+
+                        socket.send(JSON.stringify(mensaje));
+                        log("📤 Enviado: " + JSON.stringify(mensaje));
+                    });
+                }
+            }
+        });
+
+        socket.onopen = function() {
+            log("✅ Conectado al WebSocket");
+        };
+
+        socket.onmessage = function(event) {
+            var mensaje = JSON.parse(event.data);
+            log("📨 Recibido: " + JSON.stringify(mensaje));
+
+            if (mensaje.tipo === "cita_actualizada") {
+                var filas = hot.getData();
+                for (var i = 0; i < filas.length; i++) {
+                    if (filas[i][0] == mensaje.id_cit) {
+                        var col = mensaje.campo === "nom_cit" ? 1 : 2;
+                        log("🔄 Actualizando fila " + i + " columna " + col + " con: " + mensaje.valor);
+
+                        // ❌ Aquí se actualiza SIN source = 'websocket', lo que vuelve a disparar afterChange
+                        hot.setDataAtCell(i, col, mensaje.valor);
+
+                        break;
+                    }
+                }
+            }
+        };
+
+        socket.onerror = function(error) {
+            log("❌ Error WebSocket: " + error);
+        };
+
+        socket.onclose = function() {
+            log("🔴 WebSocket desconectado");
+        };
+    </script>
+</body>
+</html>
